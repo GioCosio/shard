@@ -1,114 +1,141 @@
 import {
-	Editor,
 	MarkdownView,
-	MarkdownFileInfo,
-	Modal,
-	Notice,
 	Plugin,
+    Editor,
 } from 'obsidian';
+import { Extension } from '@codemirror/state'
+import { ViewPlugin, ViewUpdate } from '@codemirror/view';
 import {
 	DEFAULT_SETTINGS,
-	MyPluginSettings,
-	SampleSettingTab,
+	ShardSettings,
+	ShardSettingTab,
 } from './settings';
+import { 
+	FileExplorerView,
+	FILE_EXPLORER,
+} from './features/file-explorer/file-explorer-leaf';
+import {
+	TABLE_EDITOR,
+	TableEditorView,
+} from './features/table-editor'
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
-	settings!: MyPluginSettings;
+export default class ShardPlugin extends Plugin {
+	settings!: ShardSettings;
 
 	async onload() {
 		await this.loadSettings();
+		
+		// Add the settings tab under community plugins
+		this.addSettingTab(new ShardSettingTab(this.app, this));
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (_evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		// register custom leaves
+		this.registerView(FILE_EXPLORER, (leaf) => new FileExplorerView(leaf));
+		this.registerView(TABLE_EDITOR, (leaf) => new TableEditorView(leaf));
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			},
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (
-				editor: Editor,
-				_ctx: MarkdownView | MarkdownFileInfo,
-			) => {
-				editor.replaceSelection('Sample editor command');
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView =
-					this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			},
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(activeDocument, 'click', (_evt: MouseEvent) => {
-			new Notice('Click');
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(
-			window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000),
-		);
+		this.updateFeatures();
 	}
 
-	onunload() {}
+	onunload() {
+		// remove all custom leaves
+		this.app.workspace.detachLeavesOfType(TABLE_EDITOR);
+		this.app.workspace.detachLeavesOfType(FILE_EXPLORER);
+
+		// add back the original file explorer leaf if removed
+		let FileExplorerLeaf = this.app.workspace.getLeavesOfType('file-explorer')[0];
+		if (!FileExplorerLeaf) {
+			FileExplorerLeaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+		}
+		if (FileExplorerLeaf) {
+			FileExplorerLeaf.setViewState({ type: 'file-explorer'});
+		}
+	}
+
+	updateFeatures() {
+		// ----------------------------------------------------------------------------------------------
+		// File Explorer
+		// ----------------------------------------------------------------------------------------------
+		// Create my file explorer leaf used for all of the file explorer features
+		if (
+			this.settings.manualFileExplorer || 
+			this.settings.folderFile ||
+			this.settings.folderTemplate ||
+			this.settings.fileColors ||
+			this.settings.folderContents
+		)
+		{
+			// remove the original file explorer leaf
+			this.app.workspace.getLeavesOfType("file-explorer").forEach(leaf => leaf.detach());
+			// add custom file explorer leaf to the left bar if it doesn't exist, otherwise activate it
+			let FileExplorerLeaf = this.app.workspace.getLeavesOfType(FILE_EXPLORER)[0];
+			if (!FileExplorerLeaf) {
+				FileExplorerLeaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+			}
+			if (FileExplorerLeaf) {
+				FileExplorerLeaf.setViewState({ type: FILE_EXPLORER});
+			}
+
+			// add a command to open the custom file explorer leaf
+			this.addCommand({
+				id: 'open-manaul-file-explorer',
+				name: 'Open Manual File Explorer',
+				callback: () => {
+					let FileExplorerLeaf = this.app.workspace.getLeavesOfType(FILE_EXPLORER)[0];
+					if (!FileExplorerLeaf) {
+						FileExplorerLeaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+					}
+					if (FileExplorerLeaf) {
+						FileExplorerLeaf.setViewState({ type: FILE_EXPLORER});
+					}
+				}
+			});
+		}
+		// replace file explorer leaf 
+		else {
+			this.app.workspace.getLeavesOfType(FILE_EXPLORER).forEach(leaf => leaf.detach());
+			let FileExplorerLeaf = this.app.workspace.getLeavesOfType('file-explorer')[0];
+			if (!FileExplorerLeaf) {
+				FileExplorerLeaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+			}
+			if (FileExplorerLeaf) {
+				FileExplorerLeaf.setViewState({ type: 'file-explorer'});
+			}
+		}
+		// ----------------------------------------------------------------------------------------------
+		// Table Editor
+		// ----------------------------------------------------------------------------------------------
+		if (this.settings.tableEditor) {
+			let tableEditorLeaf = this.app.workspace.getLeavesOfType(TABLE_EDITOR)[0];
+			if (!tableEditorLeaf) {
+				tableEditorLeaf = this.app.workspace.getRightLeaf(false) ?? undefined;
+			}
+			if (tableEditorLeaf) {
+				tableEditorLeaf.setViewState({ type: TABLE_EDITOR});
+			}
+			this.addCommand({
+				id: 'open-table-editor',
+				name: 'Open Table Editor',
+				callback: () => {
+					let tableEditorLeaf = this.app.workspace.getLeavesOfType(TABLE_EDITOR)[0];
+					if (!tableEditorLeaf) {
+						tableEditorLeaf = this.app.workspace.getRightLeaf(false) ?? undefined;
+					}
+					if (tableEditorLeaf) {
+						tableEditorLeaf.setViewState({ type: TABLE_EDITOR});
+					}
+				}
+			});
+		}
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<MyPluginSettings>,
+			(await this.loadData()) as Partial<ShardSettings>,
 		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
 	}
 }
