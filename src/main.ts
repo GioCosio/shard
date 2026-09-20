@@ -77,14 +77,14 @@ export default class ShardPlugin extends Plugin {
 			// add a command to open the custom file explorer leaf
 			this.addCommand({
 				id: 'open-manaul-file-explorer',
-				name: 'Open Manual File Explorer',
+				name: 'Open File Explorer',
 				callback: () => {
 					let FileExplorerLeaf = this.app.workspace.getLeavesOfType(FILE_EXPLORER)[0];
 					if (!FileExplorerLeaf) {
 						FileExplorerLeaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
 					}
 					if (FileExplorerLeaf) {
-						FileExplorerLeaf.setViewState({ type: FILE_EXPLORER});
+						FileExplorerLeaf.setViewState({ type: FILE_EXPLORER, active: true});
 					}
 				}
 			});
@@ -120,7 +120,7 @@ export default class ShardPlugin extends Plugin {
 						tableEditorLeaf = this.app.workspace.getRightLeaf(false) ?? undefined;
 					}
 					if (tableEditorLeaf) {
-						tableEditorLeaf.setViewState({ type: TABLE_EDITOR});
+						tableEditorLeaf.setViewState({ type: TABLE_EDITOR, active: true});
 					}
 				}
 			});

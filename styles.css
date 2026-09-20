@@ -1,8 +1,89 @@
-/*
+.my-files {
+    width: 100%;
+    height: 100%;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.my-files .my-folder-title {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    box-sizing: border-box;
 
-If your plugin does not need CSS, delete this file.
+    min-height: 28px;
+    padding-right: 8px;
 
-*/
+    border-radius: 4px;
+    cursor: pointer;
+
+    color: var(--text-muted);
+}
+
+.my-files .my-file-title {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    box-sizing: border-box;
+
+    min-height: 28px;
+    padding-left: 8px;
+    padding-right: 8px;
+
+    border-radius: 4px;
+    cursor: pointer;
+
+    color: var(--text-muted);
+}
+
+.my-files .my-folder-title:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.my-files .collapse-icon {
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.my-files .my-folder-title-content {
+    flex: 1;
+    min-width: 0;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    font: 15px;
+}
+
+.my-files .my-folder-children {
+    margin-left: 12px;
+    border-left: 1px solid var(--background-modifier-border);
+}
+
+.my-files .my-file-title:hover {
+    background-color: var(--background-modifier-hover);
+}
+
+.my-files .my-file-title.is-active {
+    background-color: var(--background-modifier-active-hover);
+    color: var(--text-normal);
+}
+
+.my-files .is-being-dragged {
+    background-color: var(--background-modifier-active-hover);
+    opacity: 0.5;
+}
+
+.my-files.is-being-dragged-over {
+    background-color: var(--background-modifier-active-hover);
+}
+
+.my-files .is-being-dragged-over {
+    background-color: var(--background-modifier-active-hover);
+    color: var(--text-accent);
+}
