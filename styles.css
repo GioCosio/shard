@@ -1,16 +1,21 @@
-.my-files {
+.my-files-container{
     width: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
-.my-files .my-folder-title {
+.my-folder {
+    border-radius: 4px;
+}
+
+.my-folder-title {
     display: flex;
     align-items: center;
     width: 100%;
     box-sizing: border-box;
 
     min-height: 28px;
-    padding-right: 8px;
 
     border-radius: 4px;
     cursor: pointer;
@@ -18,7 +23,7 @@
     color: var(--text-muted);
 }
 
-.my-files .my-file-title {
+.my-file-title {
     display: flex;
     align-items: center;
     width: 100%;
@@ -34,12 +39,7 @@
     color: var(--text-muted);
 }
 
-.my-files .my-folder-title:hover {
-    background-color: var(--background-modifier-hover);
-    color: var(--text-normal);
-}
-
-.my-files .collapse-icon {
+.collapse-icon {
     flex: 0 0 24px;
     width: 24px;
     height: 24px;
@@ -49,7 +49,7 @@
     justify-content: center;
 }
 
-.my-files .my-folder-title-content {
+.my-folder-title-content {
     flex: 1;
     min-width: 0;
 
@@ -60,30 +60,56 @@
     font: 15px;
 }
 
-.my-files .my-folder-children {
+.my-folder-children {
     margin-left: 12px;
+    padding-left: 3px;
     border-left: 1px solid var(--background-modifier-border);
 }
 
-.my-files .my-file-title:hover {
-    background-color: var(--background-modifier-hover);
+.root-directory {
+    width: 100%;
+    flex: 1;
 }
 
-.my-files .my-file-title.is-active {
-    background-color: var(--background-modifier-active-hover);
+.my-folder-title:hover {
+    background-color: var(--background-modifier-hover);
     color: var(--text-normal);
 }
 
-.my-files .is-being-dragged {
-    background-color: var(--background-modifier-active-hover);
-    opacity: 0.5;
+.my-file-title:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
 }
 
-.my-files.is-being-dragged-over {
-    background-color: var(--background-modifier-active-hover);
+.my-file-title.is-active {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
 }
 
-.my-files .is-being-dragged-over {
+.is-being-dragged {
+    opacity: 30%;
+}
+
+.my-folder.is-being-dragged-over, 
+.view-content.is-being-dragged-over{
     background-color: var(--background-modifier-active-hover);
     color: var(--text-accent);
+}
+
+.my-file.is-being-dragged-over {
+    border-top: 2px solid var(--background-modifier-active-hover);
+}
+
+.my-drag-image {
+    position: absolute;
+    top: -1000px;
+    left: -1000px;
+
+    background: var(--background-primary);
+    color: var(--text-normal);
+    padding: 4px 8px;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    width: max-content;
+    pointer-events: none;
 }

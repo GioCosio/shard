@@ -40,19 +40,16 @@ export class ShardSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		containerEl.createEl("h2", {text: "Shard",});
-		containerEl.createEl("hr");
-
 		// ---------------------------------------------------------------
 		// File Explorer
 		// ---------------------------------------------------------------
 		
-		containerEl.createEl("h3", { text: "File Explorer", });
+		new Setting(containerEl).setName("File explorer").setHeading()
 
 		new Setting(containerEl)
 			.setName("Manual file ordering")
 			.setDesc(
-				"Allow notes and folders in the File Explorer to be manually ordered using drag and drop."
+				"Allow notes and folders in the file explorer to be manually ordered using drag and drop."
 			)
 			.addToggle((toggle) =>
 				toggle
@@ -61,7 +58,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.manualFileExplorer = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -77,7 +74,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.folderFile = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -93,7 +90,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.folderTemplate = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -109,7 +106,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.fileColors = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -125,7 +122,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.folderContents = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -135,7 +132,7 @@ export class ShardSettingTab extends PluginSettingTab {
 		// Editor
 		// ---------------------------------------------------------------
 
-		containerEl.createEl("h3", { text: "Editor", });
+		new Setting(containerEl).setName("Editor").setHeading()
 
 		new Setting(containerEl)
 			.setName("Sticky headers")
@@ -149,7 +146,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.stickyHeadings = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -165,7 +162,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.autoLink = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 		
@@ -187,7 +184,7 @@ export class ShardSettingTab extends PluginSettingTab {
 						this.plugin.settings.tableEditor = value;
 
 						await this.plugin.saveSettings();
-						await this.plugin.updateFeatures();
+						this.plugin.updateFeatures();
 					})
 			);
 	}

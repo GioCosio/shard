@@ -4,25 +4,33 @@ import {
     TFolder,
     TFile,
     TAbstractFile,
-    Menu,
     setIcon,
     Notice,
+    Menu,
 } from 'obsidian';
+import ShardPlugin from '../../main';
+
+interface ShardPluginData {
+    fileExplorerOrder?: FileExplorerOrder;
+}
+
+interface FileExplorerOrder {
+    [folderPath: string]: string[];
+}
 
 export const FILE_EXPLORER = 'my-file-explorer';
 
 export class FileExplorerView extends ItemView {
-    // the div that holds the entire leaf
     private fileTreeContainer: HTMLElement | null = null;
-    // a set that contains the path to folders that have been expanded
-    private expandedFolders = new Set<string>();
-    // the current selected folder
-    private selectedFolder: TFolder | null = null;
-    // used to handle when multiple command requests come in
-    private renderQueued = false;
-    private dragOverFolder: HTMLElement | null = null;
+    private collapsedFoldersPath = new Set<string>();
+    private activeFilePath: string | null = null;
+    private dragImage: HTMLElement | null = null;
+    private customOrder: FileExplorerOrder = {};
 
-    constructor(leaf: WorkspaceLeaf) {
+    constructor(
+        leaf: WorkspaceLeaf,
+        private myPlugin: ShardPlugin,
+    ) {
         super(leaf);
     }
 
@@ -31,7 +39,7 @@ export class FileExplorerView extends ItemView {
     }
 
     getDisplayText(): string {
-        return 'File Explorer';
+        return 'File explorer';
     }
 
     getIcon(): string {
@@ -39,1273 +47,470 @@ export class FileExplorerView extends ItemView {
     }
 
     async onOpen(): Promise<void> {
-    const container = this.containerEl.children[1];
+        const container = this.containerEl.children[1];
 
-    if (!(container instanceof HTMLElement)) {
-        return;
+        if (!(container instanceof HTMLElement)) {
+            return;
+        }
+
+        // Load the saved custom ordering
+        await this.loadCustomOrder();
+
+        container.empty();
+
+        // Render the highest level of the leaf
+        this.fileTreeContainer = container.createDiv({ cls: 'my-files-container', attr: {'data-path': '/'}, })!;
+
+        // Register DOM Events
+        this.registerEventHandlers();
+        
+        // render the rest of the tree
+        this.renderTree();
     }
-
-    container.empty();
-
-    this.addHeader(container);
-
-    const fileExplorer = container.createDiv({
-        cls: 'my-files',
-    });
-
-    this.fileTreeContainer = fileExplorer.createDiv({
-        cls: 'my-files-container',
-    });
-
-    this.registerRootDropEvents(fileExplorer);
-    this.registerDragEvents();
-
-    this.registerVaultEvents();
-    this.registerWorkspaceEvents();
-
-    this.renderTree();
-}
 
     async onClose(): Promise<void> {
         this.fileTreeContainer = null;
     }
 
-    // -------------------------------------------------------------------------
-    // Header
-    // -------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------
+    // Rendering
+    // ---------------------------------------------------------------------------------------------
 
-    private addHeader(container: HTMLElement): void {
-        const header = container.createDiv({
-            cls: 'nav-header',
-        });
-
-        const buttons = header.createDiv({
-            cls: 'nav-buttons-container',
-        });
-
-        // New note
-        this.createHeaderButton(
-            buttons,
-            'square-pen',
-            'New note',
-            () => {
-                void this.createNewNote();
-            },
-        );
-
-        // New folder
-        this.createHeaderButton(
-            buttons,
-            'folder-plus',
-            'New folder',
-            () => {
-                void this.createNewFolder();
-            },
-        );
-    }
-
-    private createHeaderButton(
-        parent: HTMLElement,
-        icon: string,
-        label: string,
-        callback: () => void,
-    ): HTMLElement {
-        const button = parent.createDiv({
-            cls: 'clickable-icon nav-action-button',
-            attr: {
-                'aria-label': label,
-            },
-        });
-
-        setIcon(button, icon);
-
-        this.registerDomEvent(button, 'click', (event) => {
-            event.stopPropagation();
-            callback();
-        });
-
-        return button;
-    }
-
-    // -------------------------------------------------------------------------
-    // Events
-    // -------------------------------------------------------------------------
-
-    private registerRootDropEvents(
-        fileExplorer: HTMLElement,
-    ): void {
-        this.registerDomEvent(
-            fileExplorer,
-            'dragover',
-            (event: DragEvent) => {
-                const target = event.target;
-
-                const folder =
-                    target instanceof HTMLElement
-                        ? target.closest('.my-folder')
-                        : null;
-
-                if (folder instanceof HTMLElement) {
-                    this.updateDragHighlight(
-                        fileExplorer,
-                        folder,
-                    );
-                    return;
-                }
-
-                event.preventDefault();
-
-                this.updateDragHighlight(
-                    fileExplorer,
-                    null,
-                );
-
-                if (event.dataTransfer) {
-                    event.dataTransfer.dropEffect = 'move';
-                }
-            },
-        );
-
-        this.registerDomEvent(
-            fileExplorer,
-            'drop',
-            (event: DragEvent) => {
-                const target = event.target;
-
-                const folder =
-                    target instanceof HTMLElement
-                        ? target.closest('.my-folder')
-                        : null;
-
-                // Let the folder's own drop handler deal with
-                // drops on folders.
-                if (folder instanceof HTMLElement) {
-                    this.clearDragHighlight();
-                    return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                this.clearDragHighlight();
-
-                void this.handleRootDrop(event);
-            },
-        );
-    }
-
-    private registerDragEvents(): void {
-        this.registerDomEvent(
-            document,
-            'dragend',
-            () => {
-                this.clearDragHighlight();
-            },
-        );
-
-        this.registerDomEvent(
-            document,
-            'drop',
-            () => {
-                this.clearDragHighlight();
-            },
-        );
-    }
-
-    private async handleRootDrop(
-        event: DragEvent,
-    ): Promise<void> {
-        const sourcePath =
-            event.dataTransfer?.getData(
-                'text/plain',
-            );
-
-        if (!sourcePath) {
-            return;
-        }
-
-        const source =
-            this.app.vault.getAbstractFileByPath(
-                sourcePath,
-            );
-
-        if (!source) {
-            return;
-        }
-
-        const root =
-            this.app.vault.getRoot();
-
-        // Already at the root.
-        if (source.parent === root) {
-            return;
-        }
-
-        const newPath = source.name;
-
-        // Don't overwrite an existing item.
-        if (
-            this.app.vault.getAbstractFileByPath(
-                newPath,
-            )
-        ) {
-            new Notice(
-                'A file or folder with that name already exists at the root.',
-            );
-
-            return;
-        }
-
-        try {
-            await this.app.fileManager.renameFile(
-                source,
-                newPath,
-            );
-
-            this.selectedFolder = null;
-
-            this.queueRender();
-        } catch (error) {
-            console.error(
-                'Failed to move item to root:',
-                error,
-            );
-
-            new Notice(
-                'Failed to move item to root.',
-            );
-        }
-    }
-
-    private registerVaultEvents(): void {
-        this.registerEvent(
-            this.app.vault.on('create', () => {
-                this.queueRender();
-            }),
-        );
-
-        this.registerEvent(
-            this.app.vault.on('delete', (file) => {
-                this.handleDeletedFile(file);
-                this.queueRender();
-            }),
-        );
-
-        this.registerEvent(
-            this.app.vault.on('rename', (file, oldPath) => {
-                this.handleRenamedFile(file, oldPath);
-                this.queueRender();
-            }),
-        );
-
-        this.registerEvent(
-            this.app.vault.on('modify', () => {
-                this.updateActiveFile();
-            }),
-        );
-    }
-
-    private registerWorkspaceEvents(): void {
-        this.registerEvent(
-            this.app.workspace.on('active-leaf-change', () => {
-                this.updateActiveFile();
-            }),
-        );
-
-        this.registerEvent(
-            this.app.workspace.on('file-open', () => {
-                this.updateActiveFile();
-            }),
-        );
-    }
-
-    private handleDeletedFile(file: TAbstractFile): void {
-        if (file instanceof TFolder) {
-            this.expandedFolders.delete(file.path);
-
-            if (
-                this.selectedFolder &&
-                (
-                    this.selectedFolder === file ||
-                    this.selectedFolder.path.startsWith(`${file.path}/`)
-                )
-            ) {
-                this.selectedFolder = null;
-            }
-        }
-
-        if (file instanceof TFile) {
-            // Nothing else required.
-            // The active-file state will be refreshed after rendering.
-        }
-    }
-
-    private handleRenamedFile(
-        file: TAbstractFile,
-        oldPath: string,
-    ): void {
-        if (file instanceof TFolder) {
-            const oldExpanded = this.expandedFolders.has(oldPath);
-
-            this.expandedFolders.delete(oldPath);
-
-            if (oldExpanded) {
-                this.expandedFolders.add(file.path);
-            }
-
-            if (this.selectedFolder?.path === oldPath) {
-                this.selectedFolder = file;
-            }
-        }
-    }
-
-    private queueRender(): void {
-        if (this.renderQueued) {
-            return;
-        }
-
-        this.renderQueued = true;
-
-        window.requestAnimationFrame(() => {
-            this.renderQueued = false;
-            this.renderTree();
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // Tree
-    // -------------------------------------------------------------------------
-
+    // start from the root and start recursively rendering each of the items within
     private renderTree(): void {
         if (!this.fileTreeContainer) {
             return;
         }
-
         this.fileTreeContainer.empty();
 
         const root = this.app.vault.getRoot();
-
-        const children = this.sortFiles(root.children);
-
-        for (const child of children) {
-            this.renderAbstractFile(
-                child,
-                this.fileTreeContainer,
-            );
-        }
-
-        this.updateActiveFile();
-    }
-
-    private renderAbstractFile(
-        file: TAbstractFile,
-        parentEl: HTMLElement,
-    ): void {
-        if (this.shouldHide(file)) {
-            return;
-        }
-
-        if (file instanceof TFolder) {
-            this.renderFolder(file, parentEl);
-            return;
-        }
-
-        if (file instanceof TFile) {
-            this.renderFile(file, parentEl);
+        for (const child of this.getOrderedChildren(root)) {
+            this.renderAbstractFile(child, this.fileTreeContainer);
         }
     }
 
-    private shouldHide(file: TAbstractFile): boolean {
-        /*
-         * Obsidian's visible vault API doesn't expose files inside
-         * hidden/system directories in the same way as the underlying
-         * filesystem.
-         *
-         * We deliberately only hide dot-prefixed folders here.
-         */
-        return (
-            file instanceof TFolder &&
-            file.name.startsWith('.')
+    private getOrderedChildren(folder: TFolder): TAbstractFile[] {
+        const folderPath = folder.path;
+        const savedOrder = this.customOrder[folderPath];
+
+        // No custom order exists yet.
+        if (!savedOrder) {
+            return [...folder.children];
+        }
+
+        const childrenByPath = new Map(
+            folder.children.map(child => [child.path, child])
         );
+
+        const orderedChildren: TAbstractFile[] = [];
+
+        // Add items according to the saved order.
+        for (const path of savedOrder) {
+            const child = childrenByPath.get(path);
+
+            if (child) {
+                orderedChildren.push(child);
+                childrenByPath.delete(path);
+            }
+        }
+
+        // Add new items that aren't in the saved order yet.
+        for (const child of folder.children) {
+            if (childrenByPath.has(child.path)) {
+                orderedChildren.push(child);
+            }
+        }
+
+        return orderedChildren;
     }
 
-    private sortFiles(
-        files: TAbstractFile[],
-    ): TAbstractFile[] {
-        return [...files].sort((a, b) => {
-            const aFolder = a instanceof TFolder;
-            const bFolder = b instanceof TFolder;
-
-            if (aFolder && !bFolder) {
-                return -1;
-            }
-
-            if (!aFolder && bFolder) {
-                return 1;
-            }
-
-            return a.name.localeCompare(
-                b.name,
-                undefined,
-                {
-                    sensitivity: 'base',
-                    numeric: true,
-                },
-            );
-        });
+    // passes the item to it's correspending render method
+    private renderAbstractFile( item: TAbstractFile, parentEl: HTMLElement, ): void {
+        if (item instanceof TFolder) {
+            this.renderFolder(item, parentEl);
+        } else if (item instanceof TFile) {
+            this.renderFile(item, parentEl);
+        }
     }
 
-    // -------------------------------------------------------------------------
-    // Folder
-    // -------------------------------------------------------------------------
-
-    private renderFolder(
-        folder: TFolder,
-        parentEl: HTMLElement,
-    ): void {
+    // renders the folder and recursively renders any of it's children
+    private renderFolder( folder: TFolder, parentEl: HTMLElement, ): void {
+        // the node that holds all the information
         const folderNode = parentEl.createDiv({
             cls: 'my-folder',
-            attr: {
-                'data-path': folder.path,
-            },
+            attr: { 'data-path': folder.path, },
         });
 
-        const isExpanded = this.expandedFolders.has(folder.path);
-
+        // the title which will contain the name of the folder
         const folderTitle = folderNode.createDiv({
-            cls: [
-                'my-folder-title',
-                'is-clickable',
-                'mod-collapsible',
-            ].join(' '),
-            attr: {
-                'data-path': folder.path,
-                'aria-expanded': String(isExpanded),
-                'aria-label': folder.name,
-            },
+            cls: 'my-folder-title',
+            attr: { 'data-path': folder.path, 'aria-label': folder.name, 'aria-expanded': 'true', },
         });
-
         folderTitle.draggable = true;
 
-        // Collapse / expand icon
+        // the icon for whether folder is collapsed or expanded
         const collapseIcon = folderTitle.createDiv({
             cls: 'tree-item-icon collapse-icon',
         });
+        setIcon( collapseIcon, 'chevron-down', );
 
-        setIcon(
-            collapseIcon,
-            isExpanded ? 'chevron-down' : 'chevron-right',
-        );
-
-        // Folder name
+        // the text containing the name of the folder
         folderTitle.createDiv({
             cls: 'tree-item-inner my-folder-title-content',
             text: folder.name,
         });
 
-        this.registerFolderEvents(
-            folder,
-            folderTitle,
-            folderNode,
-        );
-
-        if (!isExpanded) {
-            return;
-        }
-
+        // folder contents
         const childrenContainer = folderNode.createDiv({
             cls: 'my-folder-children',
         });
 
-        const children = this.sortFiles(folder.children);
+        // check the collapsed folders and add class if it is
+        if (this.collapsedFoldersPath.has(folderTitle.dataset.path as string)) {
+            folderTitle.classList.add('is-collapsed');
+            setIcon( collapseIcon, 'chevron-right', );
+            childrenContainer.hidden = true;
+        }
 
-        for (const child of children) {
-            this.renderAbstractFile(
-                child,
-                childrenContainer,
-            );
+        // recursively render each of the children items
+        for (const child of this.getOrderedChildren(folder)) {
+            this.renderAbstractFile( child, childrenContainer, );
         }
     }
 
-    private registerFolderEvents(
-        folder: TFolder,
-        element: HTMLElement,
-        folderNode: HTMLElement,
-    ): void {
-        // Click: select + toggle
-        this.registerDomEvent(
-            element,
-            'click',
-            (event: MouseEvent) => {
-                event.stopPropagation();
-
-                if (event.button !== 0) {
-                    return;
-                }
-
-                this.selectedFolder = folder;
-
-                if (this.expandedFolders.has(folder.path)) {
-                    this.expandedFolders.delete(folder.path);
-                } else {
-                    this.expandedFolders.add(folder.path);
-                }
-
-                this.renderTree();
-            },
-        );
-
-        // Double click
-        this.registerDomEvent(
-            element,
-            'dblclick',
-            (event: MouseEvent) => {
-                event.stopPropagation();
-
-                this.selectedFolder = folder;
-
-                if (!this.expandedFolders.has(folder.path)) {
-                    this.expandedFolders.add(folder.path);
-                    this.renderTree();
-                }
-            },
-        );
-
-        // Context menu
-        this.registerDomEvent(
-            element,
-            'contextmenu',
-            (event: MouseEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                this.selectedFolder = folder;
-
-                this.showFolderMenu(
-                    folder,
-                    event,
-                );
-            },
-        );
-
-        // Drag start
-                // Drag start
-        this.registerDomEvent(
-            element,
-            'dragstart',
-            (event: DragEvent) => {
-                if (!event.dataTransfer) {
-                    return;
-                }
-
-                event.stopPropagation();
-
-                event.dataTransfer.effectAllowed = 'move';
-
-                event.dataTransfer.setData(
-                    'text/plain',
-                    folder.path,
-                );
-
-                element.addClass(
-                    'is-being-dragged',
-                );
-            },
-        );
-
-        // Drag end
-        this.registerDomEvent(
-            element,
-            'dragend',
-            () => {
-                element.removeClass(
-                    'is-being-dragged',
-                );
-
-                this.clearDragHighlight();
-            },
-        );
-
-        // Drag over folder
-        this.registerDomEvent(
-            folderNode,
-            'dragover',
-            (event: DragEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                const fileExplorer =
-                    folderNode.closest('.my-files');
-
-                if (
-                    fileExplorer instanceof HTMLElement
-                ) {
-                    this.updateDragHighlight(
-                        fileExplorer,
-                        folderNode,
-                    );
-                }
-
-                if (event.dataTransfer) {
-                    event.dataTransfer.dropEffect = 'move';
-                }
-            },
-        );
-
-        // Drop on folder
-        this.registerDomEvent(
-            folderNode,
-            'drop',
-            (event: DragEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                this.clearDragHighlight();
-
-                void this.handleDrop(
-                    folder,
-                    event,
-                );
-            },
-        );
-    }
-
-    // -------------------------------------------------------------------------
-    // File
-    // -------------------------------------------------------------------------
-
-    private renderFile(
-        file: TFile,
-        parentEl: HTMLElement,
-    ): void {
+    // renders the file 
+    private renderFile( file: TFile, parentEl: HTMLElement, ): void {
         const fileNode = parentEl.createDiv({
             cls: 'my-file',
-            attr: {
-                'data-path': file.path,
-            },
+            attr: { 'data-path': file.path, },
         });
-
-        const fileTitle = fileNode.createDiv({
-            cls: [
-                'my-file-title',
-                'tappable',
-                'is-clickable',
-            ].join(' '),
-            attr: {
-                'data-path': file.path,
-                'aria-label': file.name,
-            },
-        });
-
-        fileTitle.draggable = true;
 
         // File name
+        const fileTitle = fileNode.createDiv({
+            cls: 'my-file-title',
+            attr: { 'data-path': file.path, 'aria-label': file.name, },
+        });
+        fileTitle.draggable = true;
+        
         fileTitle.createDiv({
             cls: 'tree-item-inner my-file-title-content',
             text: file.basename,
         });
-
-        this.registerFileEvents(
-            file,
-            fileTitle,
-            fileNode,
-        );
-    }
-
-    private registerFileEvents(
-        file: TFile,
-        element: HTMLElement,
-        fileNode: HTMLElement,
-    ): void {
-        // Open
-        this.registerDomEvent(
-            element,
-            'click',
-            (event: MouseEvent) => {
-                event.stopPropagation();
-
-                if (event.button !== 0) {
-                    return;
-                }
-
-                void this.openFile(file, event);
-            },
-        );
-
-        // Context menu
-        this.registerDomEvent(
-            element,
-            'contextmenu',
-            (event: MouseEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                this.showFileMenu(
-                    file,
-                    event,
-                );
-            },
-        );
-
-        // Drag
-        this.registerDomEvent(
-            element,
-            'dragstart',
-            (event: DragEvent) => {
-                if (!event.dataTransfer) {
-                    return;
-                }
-
-                event.stopPropagation();
-
-                event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData(
-                    'text/plain',
-                    file.path,
-                );
-
-                element.addClass('is-being-dragged');
-            },
-        );
-
-        this.registerDomEvent(
-            element,
-            'dragend',
-            () => {
-                element.removeClass('is-being-dragged');
-            },
-        );
-
-        // Allow dropping onto a file's parent tree item without
-        // treating the file itself as a folder.
-        this.registerDomEvent(
-            fileNode,
-            'dragover',
-            (event: DragEvent) => {
-                event.stopPropagation();
-            },
-        );
-    }
-
-    private getFileIcon(file: TFile): string {
-        switch (file.extension.toLowerCase()) {
-            case 'md':
-                return 'file-text';
-
-            case 'canvas':
-                return 'layout-dashboard';
-
-            case 'pdf':
-                return 'file-text';
-
-            case 'png':
-            case 'jpg':
-            case 'jpeg':
-            case 'gif':
-            case 'webp':
-            case 'svg':
-                return 'image';
-
-            case 'mp3':
-            case 'wav':
-            case 'm4a':
-            case 'ogg':
-                return 'music';
-
-            case 'mp4':
-            case 'webm':
-            case 'mov':
-                return 'film';
-
-            default:
-                return 'file';
+        
+        if (this.activeFilePath === file.path) {
+            fileTitle.classList.add('is-active');
         }
     }
 
-    // -------------------------------------------------------------------------
-    // File opening
-    // -------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------
+    // Event Handlers
+    // ---------------------------------------------------------------------------------------------
 
-    private async openFile(
-        file: TFile,
-        event?: MouseEvent,
-    ): Promise<void> {
-        const newLeaf = this.app.workspace.getLeaf(
-            event?.ctrlKey ||
-            event?.metaKey ||
-            event?.shiftKey
-                ? 'tab'
-                : false,
-        );
+    // function that registers all the event handlers to the tree container
+    private registerEventHandlers() {
+        if (this.fileTreeContainer) {
+            // register an event handler that actives on click
+            this.registerDomEvent( this.fileTreeContainer, 'click', this.onTreeClick.bind(this));
 
-        await newLeaf.openFile(file);
-    }
-
-    // -------------------------------------------------------------------------
-    // Context menus
-    // -------------------------------------------------------------------------
-
-    private showFileMenu(
-        file: TFile,
-        event: MouseEvent,
-    ): void {
-        const menu = new Menu();
-
-        menu.addItem((item) => {
-            item
-                .setTitle('Open')
-                .setIcon('file')
-                .onClick(() => {
-                    void this.openFile(file);
-                });
-        });
-
-        menu.addSeparator();
-
-        menu.addItem((item) => {
-            item
-                .setTitle('Rename')
-                .setIcon('pencil')
-                .onClick(() => {
-                    void this.renameFile(file);
-                });
-        });
-
-        menu.addItem((item) => {
-            item
-                .setTitle('Delete')
-                .setIcon('trash')
-                .onClick(() => {
-                    void this.trashFile(file);
-                });
-        });
-
-        menu.addSeparator();
-
-        menu.addItem((item) => {
-            item
-                .setTitle('New note')
-                .setIcon('square-pen')
-                .onClick(() => {
-                    void this.createNewNote(
-                        file.parent instanceof TFolder
-                            ? file.parent
-                            : null,
-                    );
-                });
-        });
-
-        menu.showAtMouseEvent(event);
-    }
-
-    private showFolderMenu(
-        folder: TFolder,
-        event: MouseEvent,
-    ): void {
-        const menu = new Menu();
-
-        menu.addItem((item) => {
-            item
-                .setTitle('New note')
-                .setIcon('square-pen')
-                .onClick(() => {
-                    void this.createNewNote(folder);
-                });
-        });
-
-        menu.addItem((item) => {
-            item
-                .setTitle('New folder')
-                .setIcon('folder-plus')
-                .onClick(() => {
-                    void this.createNewFolder(folder);
-                });
-        });
-
-        menu.addSeparator();
-
-        menu.addItem((item) => {
-            item
-                .setTitle('Rename')
-                .setIcon('pencil')
-                .onClick(() => {
-                    void this.renameFile(folder);
-                });
-        });
-
-        menu.addItem((item) => {
-            item
-                .setTitle('Delete')
-                .setIcon('trash')
-                .onClick(() => {
-                    void this.trashFile(folder);
-                });
-        });
-
-        menu.showAtMouseEvent(event);
-    }
-
-    // -------------------------------------------------------------------------
-    // Create
-    // -------------------------------------------------------------------------
-
-    private async createNewNote(
-        folder: TFolder | null = this.selectedFolder,
-    ): Promise<void> {
-        const parentPath = folder?.path ?? '';
-
-        const name = await this.getUniquePath(
-            parentPath,
-            'Untitled',
-            'md',
-        );
-
-        try {
-            const file = await this.app.vault.create(
-                name,
-                '',
-            );
-
-            await this.openFile(file);
-        } catch (error) {
-            console.error(
-                'Failed to create note:',
-                error,
-            );
-
-            new Notice(
-                'Failed to create note.',
-            );
+            // register all event handlers to deal with drag and drop
+            this.registerDomEvent( this.fileTreeContainer, 'dragstart', this.onTreeDragStart.bind(this) );
+            this.registerDomEvent( this.fileTreeContainer, 'dragend', this.onTreeDragEnd.bind(this) );
+            this.registerDomEvent( this.fileTreeContainer, 'dragover', this.onTreeDragOver.bind(this) );
+            this.registerDomEvent( this.fileTreeContainer, 'dragleave', this.onTreeDragLeave.bind(this) );
+            this.registerDomEvent( this.fileTreeContainer, 'drop', this.onTreeDrop.bind(this));
+            this.registerDomEvent( this.fileTreeContainer, 'contextmenu', this.onTreeContextMenu.bind(this) );
         }
     }
 
-    private async createNewFolder(
-        folder: TFolder | null = this.selectedFolder,
-    ): Promise<void> {
-        const parentPath = folder?.path ?? '';
+    // function that is called whenver the leaf is clicked on
+    private onTreeClick(evt: MouseEvent): void {
+        const target = evt.target as HTMLElement;
 
-        const path = await this.getUniquePath(
-            parentPath,
-            'Untitled Folder',
-            '',
-        );
+        // Find the title container closest to the click target
+        const titleEl = target.closest('.my-folder-title, .my-file-title') as HTMLElement;
+        if (!titleEl) return;
 
-        try {
-            const newFolder = await this.app.vault.createFolder(
-                path,
-            );
+        // Get the path of the item that was clicked
+        const path = titleEl.getAttribute('data-path');
+        if (!path) return;
 
-            this.selectedFolder = newFolder;
+        // Get the actual Obsidian file/folder
+        const item = this.app.vault.getAbstractFileByPath(path);
+        if (!item) return;
 
-            this.expandedFolders.add(
-                newFolder.path,
-            );
-
-            this.queueRender();
-        } catch (error) {
-            console.error(
-                'Failed to create folder:',
-                error,
-            );
-
-            new Notice(
-                'Failed to create folder.',
-            );
-        }
-    }
-
-    private async getUniquePath(
-        parentPath: string,
-        baseName: string,
-        extension: string,
-    ): Promise<string> {
-        const separator = parentPath ? '/' : '';
-
-        const suffix = extension
-            ? `.${extension}`
-            : '';
-
-        let index = 0;
-
-        while (true) {
-            const name =
-                index === 0
-                    ? baseName
-                    : `${baseName} ${index}`;
-
-            const path =
-                `${parentPath}${separator}${name}${suffix}`;
-
-            if (
-                !this.app.vault.getAbstractFileByPath(path)
-            ) {
-                return path;
+        if (item instanceof TFolder) {
+            // Update the state instead of directly modifying the DOM
+            if (this.collapsedFoldersPath.has(item.path)) {
+                this.collapsedFoldersPath.delete(item.path);
+            } else {
+                this.collapsedFoldersPath.add(item.path);
             }
 
-            index++;
+            // Re-render the tree using the updated state
+            this.renderTree();
+        }
+        else if (item instanceof TFile) {
+            // Update the active file state
+            this.activeFilePath = item.path;
+
+            // Re-render the tree using the updated state
+            this.renderTree();
+
+            // Open the file in Obsidian
+            const leaf = this.app.workspace.getLeaf(false);
+            void leaf.openFile(item);
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Rename / delete
-    // -------------------------------------------------------------------------
+    // function that is called whenever the leaf is right clicked
+    private onTreeContextMenu(evt: MouseEvent): void {
+        evt.preventDefault();
+        const target = evt.target as HTMLElement;
 
-    private async renameFile(
-        file: TAbstractFile,
-    ): Promise<void> {
-        const currentName = file.name;
+        // Find the title container closest to the click target
+        const titleEl = target.closest( '.my-folder-title, .my-file-title, .my-files-container' ) as HTMLElement;
+        if (!titleEl) return;
 
-        const newName = window.prompt(
-            'Rename',
-            currentName,
+        // Get the path of the item that was clicked
+        const path = titleEl.getAttribute('data-path');
+        if (!path) return;
+
+        // Get the actual Obsidian file/folder
+        const item = this.app.vault.getAbstractFileByPath(path);
+        
+        // Create the right click menu based on what's clicked
+        const menu = new Menu();
+        if (item?.parent) {
+            menu.addItem((item) => {
+                item
+                    .setTitle('Rename')
+                    .setIcon('pencil')
+                    .onClick(() => {
+                        console.log('Rename:', path);
+                    });
+            });
+            menu.addItem((item) => {
+                item
+                    .setTitle('Delete')
+                    .setIcon('trash')
+                    .onClick(() => {
+                        console.log('Delete:', path);
+                    });
+            });
+
+            menu.showAtMouseEvent(evt);
+        }
+        else {
+            console.log('Yes');
+        }
+    }
+
+    // function that is called whenver a drag is started
+    private onTreeDragStart(evt: DragEvent): void {
+        const target = evt.target as HTMLElement;
+
+        // Find the title container closest to the click target
+        const titleEl = target.closest('.my-folder-title, .my-file-title') as HTMLElement;
+        if (!titleEl || !evt.dataTransfer) return;
+
+        // Get the path of the title container clicked on
+        const path = titleEl.getAttribute('data-path');
+        if (!path) return;
+
+        titleEl.classList.add('is-being-dragged');
+
+        // Store the moving item's path inside the dataTransfer object
+        evt.dataTransfer.setData('text/plain', path);
+        evt.dataTransfer.effectAllowed = 'move';
+
+        // Create a copy to follow the cursor
+        const dragImage = titleEl.cloneNode(true) as HTMLElement;
+
+        dragImage.classList.remove('is-dragging');
+        dragImage.classList.add('my-drag-image');
+
+        // It needs to exist in the DOM for setDragImage() to work reliably
+        document.body.appendChild(dragImage);
+
+        // Position it somewhere off-screen
+        dragImage.classList.add('my-drag-image');
+
+        // Use the cloned element as the drag preview
+        evt.dataTransfer.setDragImage(
+            dragImage,
+            10,
+            10
         );
 
-        if (
-            newName === null ||
-            newName.trim() === '' ||
-            newName === currentName
-        ) {
-            return;
-        }
+        // Store it so we can remove it after dragging
+        this.dragImage = dragImage;
+    }
 
-        const parent = file.parent;
+    private onTreeDragEnd(evt: DragEvent): void {
+        const target = evt.target as HTMLElement;
 
-        if (!parent) {
-            return;
-        }
+        const titleEl = target.closest( '.my-folder-title, .my-file-title' ) as HTMLElement;
 
-        const newPath =
-            parent.path === ''
-                ? newName.trim()
-                : `${parent.path}/${newName.trim()}`;
+        titleEl?.classList.remove('is-being-dragged');
 
-        if (
-            this.app.vault.getAbstractFileByPath(newPath)
-        ) {
-            new Notice(
-                'A file or folder with that name already exists.',
-            );
+        this.dragImage?.remove();
+        this.dragImage = null;
+    }
 
-            return;
-        }
+    // function that is called whenver a DOM is dragged over
+    private onTreeDragOver(evt: DragEvent): void {
+        // Allow a drop event to trigger
+        evt.preventDefault();
 
-        try {
-            await this.app.fileManager.renameFile(
-                file,
-                newPath,
-            );
-        } catch (error) {
-            console.error(
-                'Failed to rename:',
-                error,
-            );
-
-            new Notice(
-                'Failed to rename.',
-            );
+        const target = evt.target as HTMLElement;
+        // Accept dropping either onto a folder title, or the root container itself
+        const dropTarget = target.closest('.my-folder-title, .my-file-title, .my-files-container') as HTMLElement;
+        
+        if (dropTarget) {
+            evt.dataTransfer!.dropEffect = 'move';
+            dropTarget.parentElement?.classList.add('is-being-dragged-over');
         }
     }
 
-    private async trashFile(
-        file: TAbstractFile,
-    ): Promise<void> {
-        try {
-            await this.app.fileManager.trashFile(
-                file,
-            );
-        } catch (error) {
-            console.error(
-                'Failed to delete:',
-                error,
-            );
-
-            new Notice(
-                'Failed to delete.',
-            );
+    // function that is called whenver a DOM being dragged leaves another
+    private onTreeDragLeave(evt: DragEvent): void {
+        const target = evt.target as HTMLElement;
+        const dropTarget = target.closest('.my-folder-title, .my-file-title, .my-files-container') as HTMLElement;
+        
+        if (dropTarget) {
+            dropTarget.parentElement?.classList.remove('is-being-dragged-over');
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Drag & drop
-    // -------------------------------------------------------------------------
+    // function that is called whenver a DOM is dropped after being dragged
+    private async onTreeDrop(evt: DragEvent): Promise<void> {
+        evt.preventDefault();
 
-    private async handleDrop(
-        targetFolder: TFolder,
-        event: DragEvent,
-    ): Promise<void> {
-        const sourcePath =
-            event.dataTransfer?.getData(
-                'text/plain',
-            );
+        const target = evt.target as HTMLElement;
+        const dropTarget = target.closest('.my-folder-title, .my-file-title, .my-files-container') as HTMLElement;
+        if (!dropTarget || !evt.dataTransfer) return;
 
-        if (!sourcePath) {
-            return;
+        // Clean up CSS state
+        dropTarget.parentElement?.classList.remove('is-being-dragged-over');
+
+        // Retrieve the source item path
+        const sourcePath = evt.dataTransfer.getData('text/plain');
+        if (!sourcePath) return;
+
+        // Determine destination folder path
+        let destFolderPath = dropTarget.getAttribute('data-path');
+        if (!destFolderPath) return;
+
+        const sourceItem = this.app.vault.getAbstractFileByPath(sourcePath);
+        if (!sourceItem) return;
+        const destItem = this.app.vault.getAbstractFileByPath(destFolderPath);
+        if (!destItem) return;
+
+        // Handle dropping onto root container
+        if (destFolderPath === '/') {
+            destFolderPath = '';
         }
 
-        const source =
-            this.app.vault.getAbstractFileByPath(
-                sourcePath,
-            );
-
-        if (!source) {
-            return;
-        }
-
-        // Can't move a folder into itself or one of its descendants.
-        if (
-            source instanceof TFolder &&
-            (
-                targetFolder.path === source.path ||
-                targetFolder.path.startsWith(
-                    `${source.path}/`,
-                )
-            )
-        ) {
-            return;
-        }
-
-        if (source.parent === targetFolder) {
-            return;
-        }
-
-        const newPath =
-            targetFolder.path === ''
-                ? source.name
-                : `${targetFolder.path}/${source.name}`;
-
-        if (
-            this.app.vault.getAbstractFileByPath(
-                newPath,
-            )
-        ) {
-            new Notice(
-                'A file or folder with that name already exists.',
-            );
-
-            return;
-        }
-
-        try {
-            await this.app.fileManager.renameFile(
-                source,
-                newPath,
-            );
-
-            this.selectedFolder = targetFolder;
-            this.expandedFolders.add(
-                targetFolder.path,
-            );
-
-            this.queueRender();
-        } catch (error) {
-            console.error(
-                'Failed to move item:',
-                error,
-            );
-
-            new Notice(
-                'Failed to move item.',
-            );
-        }
-    }
-
-    private updateDragHighlight(
-        fileExplorer: HTMLElement,
-        folderElement: HTMLElement | null,
-    ): void {
-        // Remove the previous folder highlight.
-        if (
-            this.dragOverFolder &&
-            this.dragOverFolder !== folderElement
-        ) {
-            this.dragOverFolder.removeClass(
-                'is-being-dragged-over',
-            );
-        }
-
-        this.dragOverFolder = folderElement;
-
-        if (folderElement) {
-            // Folder is the drop target.
-            fileExplorer.removeClass(
-                'is-being-dragged-over',
-            );
-
-            folderElement.addClass(
-                'is-being-dragged-over',
-            );
-        } else {
-            // Root is the drop target.
-            fileExplorer.addClass(
-                'is-being-dragged-over',
-            );
-        }
-    }
-
-    private clearDragHighlight(): void {
-        if (this.dragOverFolder) {
-            this.dragOverFolder.removeClass(
-                'is-being-dragged-over',
-            );
-
-            this.dragOverFolder = null;
-        }
-
-        const fileExplorer =
-            this.fileTreeContainer?.closest('.my-files');
-
-        if (fileExplorer instanceof HTMLElement) {
-            fileExplorer.removeClass(
-                'is-being-dragged-over',
-            );
-        }
-    }
-
-
-    // -------------------------------------------------------------------------
-    // Active file
-    // -------------------------------------------------------------------------
-
-    private updateActiveFile(): void {
-        if (!this.fileTreeContainer) {
-            return;
-        }
-
-        const activeFile =
-            this.app.workspace.getActiveFile();
-
-        const items =
-            this.fileTreeContainer.querySelectorAll(
-                '.my-file-title',
-            );
-
-        for (const item of items) {
-            if (!(item instanceof HTMLElement)) {
-                continue;
+        if (destItem instanceof TFolder || destFolderPath === '') {
+            // Prevent dropping an item into itself or its direct parent folder
+            if (sourceItem.path === destFolderPath || sourceItem.parent?.path === destFolderPath) {
+                return;
             }
 
-            const path =
-                item.dataset.path;
+            // Prevent dropping a folder into one of its own subfolders
+            if (sourceItem instanceof TFolder && destFolderPath.startsWith(sourceItem.path + '/')) {
+                new Notice('Cannot move a folder inside itself!');
+                return;
+            }
 
-            const isActive =
-                !!activeFile &&
-                path === activeFile.path;
+            // Construct the new final destination path
+            const newPath = destFolderPath === '' 
+                ? sourceItem.name 
+                : `${destFolderPath}/${sourceItem.name}`;
 
-            item.toggleClass(
-                'is-active',
-                isActive,
+            try {
+                // Use Obsidian's File System API to execute the move operation
+                await this.app.fileManager.renameFile(sourceItem, newPath);
+                
+                // Re-render the tree UI to reflect updates
+                this.renderTree();
+            } catch (error) {
+                console.error('Failed to move file:', error);
+                new Notice('Error moving file or folder.');
+            }
+        }
+        else if (destItem instanceof TFile) {
+            const parentFolder = destItem.parent;
+            if (!parentFolder) return;
+
+            // Don't allow an item to be dropped onto itself.
+            if (sourceItem.path === destItem.path) {
+                return;
+            }
+
+            // Reordering only makes sense within the same parent folder.
+            if (sourceItem.parent?.path !== parentFolder.path) {
+                new Notice('Items can only be reordered within the same folder.');
+                return;
+            }
+
+            // Get the current order of the folder.
+            const children = this.getOrderedChildren(parentFolder);
+
+            // Remove the dragged item from its current position.
+            const reorderedChildren = children.filter(
+                child => child.path !== sourceItem.path
             );
 
-            item.setAttribute(
-                'aria-current',
-                isActive
-                    ? 'page'
-                    : 'false',
+            // Find the position of the file being dropped onto.
+            const destinationIndex = reorderedChildren.findIndex(
+                child => child.path === destItem.path
             );
+
+            if (destinationIndex === -1) return;
+
+            // Insert the dragged item immediately before the destination file.
+            reorderedChildren.splice(destinationIndex, 0, sourceItem);
+
+            // Save the resulting order.
+            this.customOrder[parentFolder.path] = reorderedChildren.map(
+                child => child.path
+            );
+
+            await this.saveCustomOrder();
+
+            // Re-render the tree.
+            this.renderTree();
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Layout
-    // -------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------
+    // Custom Ordering
+    // ---------------------------------------------------------------------------------------------
+
+
+
+    private async loadCustomOrder(): Promise<void> {
+        try {
+            const data = await this.myPlugin.loadData() as unknown as ShardPluginData;
+
+            this.customOrder = data.fileExplorerOrder ?? {};
+        } catch (error) {
+            console.error('Failed to load file explorer order:', error);
+            this.customOrder = {};
+        }
+    }
+
+    private async saveCustomOrder(): Promise<void> {
+        try {
+            const data = await this.myPlugin.loadData() as unknown as ShardPluginData;
+
+            await this.myPlugin.saveData({
+                ...data,
+                fileExplorerOrder: this.customOrder,
+            });
+        } catch (error) {
+            console.error('Failed to save file explorer order:', error);
+        }
+    }
 }
